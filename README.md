@@ -142,7 +142,7 @@ side beyond having it running.
 
 | Method & path | Purpose |
 |---|---|
-| `POST /v1/workflows` | register (or update) a workflow definition |
+| `POST /v1/workflows` | register a workflow definition (a given name+version is immutable; identical re-registration is a no-op) |
 | `POST /v1/workflows/{name}/runs` | start a run |
 | `GET /v1/runs?workflow=&limit=` | list runs |
 | `GET /v1/runs/{id}` | run status plus every step's current state |
