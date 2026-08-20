@@ -113,11 +113,25 @@ the same SQLite file.
 Run the SDK's test suite with `pytest` from `sdk-python/` (after
 `pip install -e ".[dev]"`).
 
+## Dashboard
+
+```
+cd dashboard
+npm install
+npm run dev
+```
+
+Reads `VITE_FLOWFORGE_API_URL` (see `.env.example`), defaulting to
+`http://localhost:8080`. It only calls the engine's read endpoints - run
+list, run detail, history - so there's nothing to configure on the engine
+side beyond having it running.
+
 ## Status
 
 This is under active development and being built incrementally. Each piece
 lands with its own commit as it becomes real, rather than all at once.
 
 Built so far: the Go engine (state machine, persistence, retries,
-compensation, cancellation, the REST API) and the Python SDK (client,
-workflow definitions, worker runtime). Not yet built: the dashboard.
+compensation, cancellation, the REST API), the Python SDK (client,
+workflow definitions, worker runtime), and the dashboard (run list, run
+detail with step timeline and event history).

@@ -16,6 +16,10 @@ build/
 node_modules/
 dashboard/dist/
 dashboard/.vite/
+dashboard/.env
+dashboard/*.tsbuildinfo
+dashboard/vite.config.js
+dashboard/vite.config.d.ts
 
 # Runtime data
 *.db

@@ -26,7 +26,24 @@ func NewServer(e *engine.Engine) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	withCORS(s.mux).ServeHTTP(w, r)
+}
+
+// withCORS allows any origin to call the API. The dashboard is a
+// browser-based SPA that's commonly served from a different port than
+// the engine in development (Vite's dev server vs. flowforged), and
+// this API carries no cookie-based auth for CORS to protect anyway.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) routes() {
