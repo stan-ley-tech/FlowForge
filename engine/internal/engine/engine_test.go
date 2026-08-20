@@ -45,7 +45,7 @@ func TestCrashAndResume(t *testing.T) {
 			mustStep("step3", model.RetryPolicy{MaxAttempts: 2, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, ""),
 		},
 	}
-	if err := e.RegisterWorkflow(ctx, def); err != nil {
+	if _, err := e.RegisterWorkflow(ctx, def); err != nil {
 		t.Fatalf("register workflow: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestPermanentFailureTriggersCompensation(t *testing.T) {
 			mustStep("refund", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, "charge"),
 		},
 	}
-	if err := e.RegisterWorkflow(ctx, def); err != nil {
+	if _, err := e.RegisterWorkflow(ctx, def); err != nil {
 		t.Fatalf("register workflow: %v", err)
 	}
 

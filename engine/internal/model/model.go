@@ -38,11 +38,11 @@ const (
 // n (1-indexed) is BackoffBaseMs * BackoffMultiplier^(n-1), capped at
 // BackoffMaxMs, then jittered by +/- JitterFraction.
 type RetryPolicy struct {
-	MaxAttempts       int
-	BackoffBaseMs     int64
-	BackoffMultiplier float64
-	BackoffMaxMs      int64
-	JitterFraction    float64
+	MaxAttempts       int     `json:"max_attempts"`
+	BackoffBaseMs     int64   `json:"backoff_base_ms"`
+	BackoffMultiplier float64 `json:"backoff_multiplier"`
+	BackoffMaxMs      int64   `json:"backoff_max_ms"`
+	JitterFraction    float64 `json:"jitter_fraction"`
 }
 
 func DefaultRetryPolicy() RetryPolicy {
@@ -59,20 +59,20 @@ func DefaultRetryPolicy() RetryPolicy {
 // timeout, retry policy, and how long to wait after the previous step
 // completes before it becomes eligible to run.
 type StepDef struct {
-	Name           string
-	TimeoutSeconds int
-	DelaySeconds   int
-	Retry          RetryPolicy
-	CompensationOf string
+	Name           string      `json:"name"`
+	TimeoutSeconds int         `json:"timeout_seconds"`
+	DelaySeconds   int         `json:"delay_seconds"`
+	Retry          RetryPolicy `json:"retry"`
+	CompensationOf string      `json:"compensation_of,omitempty"`
 }
 
 type WorkflowDef struct {
-	Name              string
-	Version           int
-	Steps             []StepDef
-	Compensations     []StepDef
-	MaxConcurrentRuns int
-	CreatedAt         time.Time
+	Name              string    `json:"name"`
+	Version           int       `json:"version"`
+	Steps             []StepDef `json:"steps"`
+	Compensations     []StepDef `json:"compensations,omitempty"`
+	MaxConcurrentRuns int       `json:"max_concurrent_runs"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func (w WorkflowDef) CompensationFor(stepName string) (StepDef, bool) {
@@ -85,53 +85,53 @@ func (w WorkflowDef) CompensationFor(stepName string) (StepDef, bool) {
 }
 
 type Run struct {
-	ID              string
-	WorkflowName    string
-	WorkflowVersion int
-	Status          RunStatus
-	Input           json.RawMessage
-	Context         json.RawMessage
-	Error           string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID              string          `json:"id"`
+	WorkflowName    string          `json:"workflow_name"`
+	WorkflowVersion int             `json:"workflow_version"`
+	Status          RunStatus       `json:"status"`
+	Input           json.RawMessage `json:"input"`
+	Context         json.RawMessage `json:"context"`
+	Error           string          `json:"error,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 type Step struct {
-	ID                string
-	RunID             string
-	Name              string
-	StepIndex         int
-	IsCompensation    bool
-	CompensationOf    string
-	DelaySeconds      int
-	Status            StepStatus
-	Attempt           int
-	MaxAttempts       int
-	BackoffBaseMs     int64
-	BackoffMultiplier float64
-	BackoffMaxMs      int64
-	JitterFraction    float64
-	TimeoutSeconds    int
-	ScheduledAt       time.Time
-	LeaseToken        string
-	LeaseOwner        string
-	LeaseExpiresAt    *time.Time
-	StartedAt         *time.Time
-	Result            json.RawMessage
-	Error             string
-	IdempotencyKey    string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                string          `json:"id"`
+	RunID             string          `json:"run_id"`
+	Name              string          `json:"name"`
+	StepIndex         int             `json:"step_index"`
+	IsCompensation    bool            `json:"is_compensation"`
+	CompensationOf    string          `json:"compensation_of,omitempty"`
+	DelaySeconds      int             `json:"delay_seconds"`
+	Status            StepStatus      `json:"status"`
+	Attempt           int             `json:"attempt"`
+	MaxAttempts       int             `json:"max_attempts"`
+	BackoffBaseMs     int64           `json:"backoff_base_ms"`
+	BackoffMultiplier float64         `json:"backoff_multiplier"`
+	BackoffMaxMs      int64           `json:"backoff_max_ms"`
+	JitterFraction    float64         `json:"jitter_fraction"`
+	TimeoutSeconds    int             `json:"timeout_seconds"`
+	ScheduledAt       time.Time       `json:"scheduled_at"`
+	LeaseToken        string          `json:"-"`
+	LeaseOwner        string          `json:"lease_owner,omitempty"`
+	LeaseExpiresAt    *time.Time      `json:"lease_expires_at,omitempty"`
+	StartedAt         *time.Time      `json:"started_at,omitempty"`
+	Result            json.RawMessage `json:"result,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	IdempotencyKey    string          `json:"idempotency_key"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 type Event struct {
-	ID        int64
-	RunID     string
-	Seq       int64
-	Type      string
-	StepName  string
-	Detail    json.RawMessage
-	CreatedAt time.Time
+	ID        int64           `json:"id"`
+	RunID     string          `json:"run_id"`
+	Seq       int64           `json:"seq"`
+	Type      string          `json:"type"`
+	StepName  string          `json:"step_name,omitempty"`
+	Detail    json.RawMessage `json:"detail,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 const (

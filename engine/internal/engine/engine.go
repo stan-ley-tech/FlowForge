@@ -68,12 +68,12 @@ func isTerminal(s model.RunStatus) bool {
 
 // RegisterWorkflow stores a workflow definition, filling in default retry
 // policies for any step that didn't specify one.
-func (e *Engine) RegisterWorkflow(ctx context.Context, def model.WorkflowDef) error {
+func (e *Engine) RegisterWorkflow(ctx context.Context, def model.WorkflowDef) (model.WorkflowDef, error) {
 	if def.Name == "" {
-		return fmt.Errorf("workflow name is required")
+		return model.WorkflowDef{}, fmt.Errorf("workflow name is required")
 	}
 	if len(def.Steps) == 0 {
-		return fmt.Errorf("workflow %q must have at least one step", def.Name)
+		return model.WorkflowDef{}, fmt.Errorf("workflow %q must have at least one step", def.Name)
 	}
 	if def.Version == 0 {
 		def.Version = 1
@@ -86,9 +86,10 @@ func (e *Engine) RegisterWorkflow(ctx context.Context, def model.WorkflowDef) er
 	}
 	def.CreatedAt = e.now()
 
-	return e.store.Atomic(ctx, func(q *store.Queries) error {
+	err := e.store.Atomic(ctx, func(q *store.Queries) error {
 		return q.UpsertWorkflowDef(ctx, def)
 	})
+	return def, err
 }
 
 func fillRetryDefaults(rp model.RetryPolicy) model.RetryPolicy {
