@@ -69,8 +69,13 @@ func (s *Store) Atomic(ctx context.Context, fn func(q *Queries) error) error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
+	// Guards against a panic inside fn leaving the transaction open: once
+	// Commit succeeds this Rollback is a harmless no-op error we discard,
+	// but if fn panics or returns an error it's the only thing that frees
+	// the single shared connection for the next Atomic call.
+	defer tx.Rollback()
+
 	if err := fn(&Queries{db: tx}); err != nil {
-		tx.Rollback()
 		return err
 	}
 	return tx.Commit()

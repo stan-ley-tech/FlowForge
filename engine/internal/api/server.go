@@ -229,7 +229,7 @@ func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, engine.ErrWorkflowNotFound), errors.Is(err, engine.ErrRunNotFound), errors.Is(err, engine.ErrStepNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, engine.ErrLeaseMismatch), errors.Is(err, engine.ErrRunAlreadyTerminal):
+	case errors.Is(err, engine.ErrLeaseMismatch), errors.Is(err, engine.ErrRunAlreadyTerminal), errors.Is(err, engine.ErrWorkflowVersionConflict):
 		writeError(w, http.StatusConflict, err)
 	default:
 		log.Printf("api: internal error: %v", err)

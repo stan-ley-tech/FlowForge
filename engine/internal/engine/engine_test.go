@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -200,5 +201,111 @@ func TestPermanentFailureTriggersCompensation(t *testing.T) {
 	}
 	if final.Status != model.RunCompensated {
 		t.Fatalf("expected run COMPENSATED, got %s", final.Status)
+	}
+}
+
+// TestRegisterWorkflowVersionIsImmutable checks that re-registering an
+// existing (name, version) with a different definition is rejected
+// rather than silently overwriting it - a run that's already using that
+// version may re-fetch it later (to build compensation steps), and its
+// behavior shouldn't change out from under it. Re-registering the exact
+// same definition has to stay a no-op, since a worker doing that on
+// every startup is the expected usage pattern.
+func TestRegisterWorkflowVersionIsImmutable(t *testing.T) {
+	now := time.Now()
+	clock := &now
+	e, _ := newTestEngine(t, clock)
+	ctx := context.Background()
+
+	def := model.WorkflowDef{
+		Name:  "versioned",
+		Steps: []model.StepDef{mustStep("only_step", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, "")},
+	}
+	if _, err := e.RegisterWorkflow(ctx, def); err != nil {
+		t.Fatalf("initial register: %v", err)
+	}
+
+	if _, err := e.RegisterWorkflow(ctx, def); err != nil {
+		t.Fatalf("re-registering the identical definition should be a no-op, got: %v", err)
+	}
+
+	changed := model.WorkflowDef{
+		Name:  "versioned",
+		Steps: []model.StepDef{mustStep("a_different_step", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, "")},
+	}
+	if _, err := e.RegisterWorkflow(ctx, changed); !errors.Is(err, ErrWorkflowVersionConflict) {
+		t.Fatalf("expected ErrWorkflowVersionConflict registering a changed definition under the same version, got: %v", err)
+	}
+}
+
+// TestCancelRunIsIdempotentDuringCompensation checks that calling
+// CancelRun a second time while compensation is already in flight
+// doesn't try to re-materialize compensation steps that already exist.
+func TestCancelRunIsIdempotentDuringCompensation(t *testing.T) {
+	now := time.Now()
+	clock := &now
+	e, _ := newTestEngine(t, clock)
+	ctx := context.Background()
+
+	def := model.WorkflowDef{
+		Name: "cancel_demo",
+		Steps: []model.StepDef{
+			mustStep("step1", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, ""),
+			mustStep("step2", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, ""),
+		},
+		Compensations: []model.StepDef{
+			mustStep("undo_step1", model.RetryPolicy{MaxAttempts: 1, BackoffBaseMs: 10, BackoffMultiplier: 1, BackoffMaxMs: 100}, "step1"),
+		},
+	}
+	if _, err := e.RegisterWorkflow(ctx, def); err != nil {
+		t.Fatalf("register workflow: %v", err)
+	}
+
+	run, err := e.StartRun(ctx, "cancel_demo", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	step1, err := e.PollTask(ctx, "cancel_demo", "worker-a")
+	if err != nil || step1 == nil {
+		t.Fatalf("expected step1, got %+v err=%v", step1, err)
+	}
+	if err := e.CompleteStep(ctx, step1.StepID, step1.LeaseToken, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("complete step1: %v", err)
+	}
+
+	// step2 is now READY (not yet leased); cancelling here should mark
+	// it cancelled and, since step1 already completed and has a
+	// compensation, trigger compensation immediately.
+	if err := e.CancelRun(ctx, run.ID); err != nil {
+		t.Fatalf("first cancel: %v", err)
+	}
+
+	mid, err := e.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if mid.Status != model.RunCancelling {
+		t.Fatalf("expected run CANCELLING, got %s", mid.Status)
+	}
+
+	if err := e.CancelRun(ctx, run.ID); err != nil {
+		t.Fatalf("second cancel should be a no-op, got: %v", err)
+	}
+
+	undo, err := e.PollTask(ctx, "cancel_demo", "worker-a")
+	if err != nil || undo == nil || undo.StepName != "undo_step1" {
+		t.Fatalf("expected undo_step1 compensation task, got %+v err=%v", undo, err)
+	}
+	if err := e.CompleteStep(ctx, undo.StepID, undo.LeaseToken, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("complete undo_step1: %v", err)
+	}
+
+	final, err := e.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if final.Status != model.RunCancelled {
+		t.Fatalf("expected run CANCELLED, got %s", final.Status)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,6 +37,14 @@ func parseNullTime(ns sql.NullString) *time.Time {
 
 // --- workflow definitions ---
 
+// ErrVersionConflict means (name, version) was already registered with a
+// different definition. A version, once registered, is immutable - runs
+// already in flight may re-fetch it (to build compensation steps, for
+// instance) and can't have its behavior change out from under them.
+// Registering the exact same definition again is a harmless no-op, which
+// keeps "register on worker startup" idempotent.
+var ErrVersionConflict = errors.New("workflow version already registered with a different definition")
+
 func (q *Queries) UpsertWorkflowDef(ctx context.Context, def model.WorkflowDef) error {
 	stepsJSON, err := json.Marshal(def.Steps)
 	if err != nil {
@@ -48,16 +57,30 @@ func (q *Queries) UpsertWorkflowDef(ctx context.Context, def model.WorkflowDef) 
 	if def.CreatedAt.IsZero() {
 		def.CreatedAt = time.Now()
 	}
-	_, err = q.db.ExecContext(ctx, `
-		INSERT INTO workflow_defs (name, version, max_concurrent_runs, steps_json, compensations_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(name, version) DO UPDATE SET
-			max_concurrent_runs = excluded.max_concurrent_runs,
-			steps_json = excluded.steps_json,
-			compensations_json = excluded.compensations_json`,
-		def.Name, def.Version, def.MaxConcurrentRuns, string(stepsJSON), string(compJSON), fmtTime(def.CreatedAt))
-	if err != nil {
-		return fmt.Errorf("upsert workflow def: %w", err)
+
+	existing, err := q.GetWorkflowDefVersion(ctx, def.Name, def.Version)
+	if err == nil {
+		existingSteps, marshalErr := json.Marshal(existing.Steps)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		existingComp, marshalErr := json.Marshal(existing.Compensations)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if string(existingSteps) != string(stepsJSON) || string(existingComp) != string(compJSON) || existing.MaxConcurrentRuns != def.MaxConcurrentRuns {
+			return ErrVersionConflict
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check existing workflow def: %w", err)
+	} else {
+		_, err = q.db.ExecContext(ctx, `
+			INSERT INTO workflow_defs (name, version, max_concurrent_runs, steps_json, compensations_json, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			def.Name, def.Version, def.MaxConcurrentRuns, string(stepsJSON), string(compJSON), fmtTime(def.CreatedAt))
+		if err != nil {
+			return fmt.Errorf("insert workflow def: %w", err)
+		}
 	}
 
 	_, err = q.db.ExecContext(ctx, `
@@ -195,6 +218,28 @@ func (q *Queries) CountRunsByStatus(ctx context.Context, workflowName string, st
 	var n int
 	err := q.db.QueryRowContext(ctx, query, args...).Scan(&n)
 	return n, err
+}
+
+// ListDistinctQueuedWorkflowNames returns every workflow name with at
+// least one QUEUED run, regardless of how many runs exist overall - the
+// scheduler uses this to find admission candidates without the result
+// depending on how recently those runs were created.
+func (q *Queries) ListDistinctQueuedWorkflowNames(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, `SELECT DISTINCT workflow_name FROM runs WHERE status = ?`, string(model.RunQueued))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 func (q *Queries) ListQueuedRuns(ctx context.Context, workflowName string, limit int) ([]model.Run, error) {

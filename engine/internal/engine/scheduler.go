@@ -137,7 +137,7 @@ func (sch *Scheduler) enforceStepTimeouts(ctx context.Context) error {
 // admitQueuedRuns promotes QUEUED runs to RUNNING as concurrency headroom
 // appears, oldest first, respecting the workflow's MaxConcurrentRuns cap.
 func (sch *Scheduler) admitQueuedRuns(ctx context.Context) error {
-	names, err := sch.distinctQueuedWorkflowNames(ctx)
+	names, err := sch.store.Read().ListDistinctQueuedWorkflowNames(ctx)
 	if err != nil {
 		return err
 	}
@@ -147,22 +147,6 @@ func (sch *Scheduler) admitQueuedRuns(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (sch *Scheduler) distinctQueuedWorkflowNames(ctx context.Context) ([]string, error) {
-	runs, err := sch.store.Read().ListRuns(ctx, "", 500)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var names []string
-	for _, r := range runs {
-		if r.Status == model.RunQueued && !seen[r.WorkflowName] {
-			seen[r.WorkflowName] = true
-			names = append(names, r.WorkflowName)
-		}
-	}
-	return names, nil
 }
 
 func (sch *Scheduler) admitQueuedRunsFor(ctx context.Context, workflowName string) error {

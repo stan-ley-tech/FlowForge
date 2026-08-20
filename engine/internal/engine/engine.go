@@ -8,6 +8,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,11 +21,12 @@ import (
 )
 
 var (
-	ErrWorkflowNotFound   = errors.New("workflow not found")
-	ErrRunNotFound        = errors.New("run not found")
-	ErrStepNotFound       = errors.New("step not found")
-	ErrLeaseMismatch      = errors.New("lease token does not match or step is not leased")
-	ErrRunAlreadyTerminal = errors.New("run is already in a terminal state")
+	ErrWorkflowNotFound        = errors.New("workflow not found")
+	ErrRunNotFound             = errors.New("run not found")
+	ErrStepNotFound            = errors.New("step not found")
+	ErrLeaseMismatch           = errors.New("lease token does not match or step is not leased")
+	ErrRunAlreadyTerminal      = errors.New("run is already in a terminal state")
+	ErrWorkflowVersionConflict = store.ErrVersionConflict
 )
 
 const defaultLeaseDuration = 30 * time.Second
@@ -55,6 +57,16 @@ func New(s *store.Store, opts ...Option) *Engine {
 		opt(e)
 	}
 	return e
+}
+
+// notFoundOr maps a "no such row" result to sentinel, while letting any
+// other error (a closed connection, a malformed row, etc.) propagate as
+// itself instead of being misreported as a 404.
+func notFoundOr(err error, sentinel error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return sentinel
+	}
+	return err
 }
 
 func isTerminal(s model.RunStatus) bool {
@@ -143,7 +155,7 @@ func (e *Engine) StartRun(ctx context.Context, workflowName string, input json.R
 	err := e.store.Atomic(ctx, func(q *store.Queries) error {
 		def, err := q.GetLatestWorkflowDef(ctx, workflowName)
 		if err != nil {
-			return ErrWorkflowNotFound
+			return notFoundOr(err, ErrWorkflowNotFound)
 		}
 
 		now := e.now()
@@ -202,7 +214,7 @@ func (e *Engine) StartRun(ctx context.Context, workflowName string, input json.R
 func (e *Engine) GetRun(ctx context.Context, id string) (model.Run, error) {
 	run, err := e.store.Read().GetRun(ctx, id)
 	if err != nil {
-		return model.Run{}, ErrRunNotFound
+		return model.Run{}, notFoundOr(err, ErrRunNotFound)
 	}
 	return run, nil
 }
@@ -286,7 +298,7 @@ func (e *Engine) Heartbeat(ctx context.Context, stepID, leaseToken string) error
 	return e.store.Atomic(ctx, func(q *store.Queries) error {
 		step, err := q.GetStep(ctx, stepID)
 		if err != nil {
-			return ErrStepNotFound
+			return notFoundOr(err, ErrStepNotFound)
 		}
 		if step.Status != model.StepLeased || step.LeaseToken != leaseToken {
 			return ErrLeaseMismatch
@@ -312,14 +324,14 @@ func (e *Engine) CompleteStep(ctx context.Context, stepID, leaseToken string, re
 	return e.store.Atomic(ctx, func(q *store.Queries) error {
 		step, err := q.GetStep(ctx, stepID)
 		if err != nil {
-			return ErrStepNotFound
+			return notFoundOr(err, ErrStepNotFound)
 		}
 		if step.Status != model.StepLeased || step.LeaseToken != leaseToken {
 			return ErrLeaseMismatch
 		}
 		run, err := q.GetRun(ctx, step.RunID)
 		if err != nil {
-			return ErrRunNotFound
+			return notFoundOr(err, ErrRunNotFound)
 		}
 		now := e.now()
 
@@ -374,6 +386,9 @@ func (e *Engine) advanceForward(ctx context.Context, q *store.Queries, run model
 	}
 
 	next, err := q.GetStepByIndex(ctx, run.ID, step.StepIndex+1, false)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if err != nil {
 		run.Status = model.RunCompleted
 		if err := q.UpdateRun(ctx, run); err != nil {
@@ -395,6 +410,9 @@ func (e *Engine) advanceForward(ctx context.Context, q *store.Queries, run model
 
 func (e *Engine) advanceCompensation(ctx context.Context, q *store.Queries, run model.Run, step model.Step, now time.Time) error {
 	next, err := q.GetStepByIndex(ctx, run.ID, step.StepIndex+1, true)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if err != nil {
 		if run.Status == model.RunCancelling {
 			run.Status = model.RunCancelled
@@ -483,14 +501,14 @@ func (e *Engine) FailStep(ctx context.Context, stepID, leaseToken, reason string
 	return e.store.Atomic(ctx, func(q *store.Queries) error {
 		step, err := q.GetStep(ctx, stepID)
 		if err != nil {
-			return ErrStepNotFound
+			return notFoundOr(err, ErrStepNotFound)
 		}
 		if step.Status != model.StepLeased || step.LeaseToken != leaseToken {
 			return ErrLeaseMismatch
 		}
 		run, err := q.GetRun(ctx, step.RunID)
 		if err != nil {
-			return ErrRunNotFound
+			return notFoundOr(err, ErrRunNotFound)
 		}
 		return e.applyFailure(ctx, q, run, step, reason, e.now())
 	})
@@ -560,10 +578,19 @@ func (e *Engine) CancelRun(ctx context.Context, runID string) error {
 	return e.store.Atomic(ctx, func(q *store.Queries) error {
 		run, err := q.GetRun(ctx, runID)
 		if err != nil {
-			return ErrRunNotFound
+			return notFoundOr(err, ErrRunNotFound)
 		}
 		if isTerminal(run.Status) {
 			return ErrRunAlreadyTerminal
+		}
+		if run.Status == model.RunCancelling || run.Status == model.RunCompensating {
+			// Already unwinding - a forward step is either still in
+			// flight (in which case its own completion/failure will
+			// route into compensation, same as before) or compensation
+			// has already been triggered. Re-running the triggering
+			// logic here would try to insert compensation steps that
+			// already exist. Nothing left for this call to do.
+			return nil
 		}
 		now := e.now()
 
