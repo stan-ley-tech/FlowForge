@@ -126,12 +126,44 @@ Reads `VITE_FLOWFORGE_API_URL` (see `.env.example`), defaulting to
 list, run detail, history - so there's nothing to configure on the engine
 side beyond having it running.
 
+## REST API
+
+| Method & path | Purpose |
+|---|---|
+| `POST /v1/workflows` | register (or update) a workflow definition |
+| `POST /v1/workflows/{name}/runs` | start a run |
+| `GET /v1/runs?workflow=&limit=` | list runs |
+| `GET /v1/runs/{id}` | run status plus every step's current state |
+| `GET /v1/runs/{id}/history` | the full event log for a run |
+| `POST /v1/runs/{id}/cancel` | request cancellation |
+| `POST /v1/tasks/poll` | a worker claims the next eligible step |
+| `POST /v1/tasks/{id}/heartbeat` | extend a held lease |
+| `POST /v1/tasks/{id}/complete` | report success and a result |
+| `POST /v1/tasks/{id}/fail` | report failure |
+
+## What's here
+
+- Workflow definitions as an ordered list of steps, each with its own
+  retry policy, timeout, and optional compensation
+- Durable state: every run and step lives in SQLite, not in memory
+- Lease-based task queue with heartbeating, so a dead worker's step gets
+  reclaimed automatically
+- Exponential backoff with jitter, configurable per step
+- Step timeouts, enforced independently of lease/liveness
+- Delayed steps (a step can wait N seconds after the previous one before
+  becoming eligible)
+- Saga-style compensation on permanent failure or cancellation
+- Idempotency keys, stable per (run, step) across retries
+- Per-workflow concurrency caps with a queue for runs over the limit
+- Cancellation that lets an in-flight step finish before compensating
+- A full event log per run, doubling as the audit trail and the data the
+  dashboard renders
+- REST API, Python SDK, and a web dashboard
+
 ## Status
 
-This is under active development and being built incrementally. Each piece
-lands with its own commit as it becomes real, rather than all at once.
-
-Built so far: the Go engine (state machine, persistence, retries,
-compensation, cancellation, the REST API), the Python SDK (client,
-workflow definitions, worker runtime), and the dashboard (run list, run
-detail with step timeline and event history).
+This was built and committed in stages rather than all at once: domain
+model and storage first, then the orchestration engine and its test
+suite, then the REST API, then the Python SDK, then the dashboard - each
+verified working before moving to the next. `git log` has the full
+sequence.

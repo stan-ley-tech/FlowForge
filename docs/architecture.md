@@ -27,9 +27,12 @@ eligible (`READY`) only once the one before it reaches `COMPLETED`. This
 keeps ordering a property of stored state, not of any in-memory scheduler,
 so it survives an engine restart as cleanly as a worker restart.
 
-Step states: `PENDING -> READY -> LEASED -> RUNNING -> COMPLETED`, with
-`FAILED`, `CANCELLED`, and the compensation states (`COMPENSATING` /
-`COMPENSATED`) branching off along the way.
+Step states: `PENDING -> READY -> LEASED -> COMPLETED`, with `FAILED` and
+`CANCELLED` branching off along the way. `LEASED` covers both "claimed"
+and "running" - a worker is expected to be executing the step for the
+whole time it holds the lease, so there's no separate state for it.
+Compensation steps go through the same states, landing on `COMPENSATED`
+instead of `COMPLETED` when they finish.
 
 ## Leasing and crash recovery
 
@@ -65,9 +68,12 @@ the worker is alive and heartbeating.
 
 A step may declare a compensation step. When a run fails permanently or is
 cancelled, the engine walks its completed steps in reverse and schedules
-their compensations, same lease/retry machinery as forward execution. The
-run only reaches a terminal `COMPENSATED` state once every compensation for
-every completed step has itself completed.
+their compensations, same lease/retry machinery as forward execution.
+Only once every compensation has itself completed does the run reach its
+terminal state - `COMPENSATED` if a permanent failure triggered the
+rollback, `CANCELLED` if a cancellation request did. If nothing completed
+had a compensation to run, the run goes straight to that terminal state
+with no compensation phase at all.
 
 ## Idempotency
 
