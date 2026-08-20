@@ -69,11 +69,55 @@ is no in-memory state to lose.
 
 Run the engine's test suite with `go test ./...` from `engine/`.
 
+## Using the Python SDK
+
+```
+pip install -e ./sdk-python
+```
+
+```python
+from flowforge import Client, RetryPolicy, Worker, Workflow
+
+pipeline = Workflow("order_pipeline")
+
+@pipeline.step("charge", retry=RetryPolicy(max_attempts=3))
+def charge(ctx):
+    return {"charged": True}
+
+@pipeline.compensate("charge")
+def refund(ctx):
+    return {"refunded": True}
+
+client = Client("http://localhost:8080")
+client.register_workflow(pipeline)
+client.start_run("order_pipeline", {"order_id": 42})
+
+Worker(client, pipeline).run()
+```
+
+A step function takes a `Context` (`ctx.input` for the run's input,
+`ctx.get("other_step")` for a prior step's result) and returns a
+JSON-serializable result, or raises to signal failure - retry policy and
+compensation are the engine's concern, not the worker's. The `Worker`
+handles polling, heartbeating in-flight steps in a background thread, and
+reporting completion or failure.
+
+`examples/` has a full ten-step order pipeline and a walkthrough for the
+crash-recovery scenario this project is built around - see
+[examples/README.md](examples/README.md). It's not hypothetical: killing
+the worker process mid-step and restarting it resumes the run from that
+exact step, verified by hand against a running engine, including a
+variant where the engine process itself is killed and restarted against
+the same SQLite file.
+
+Run the SDK's test suite with `pytest` from `sdk-python/` (after
+`pip install -e ".[dev]"`).
+
 ## Status
 
 This is under active development and being built incrementally. Each piece
 lands with its own commit as it becomes real, rather than all at once.
 
 Built so far: the Go engine (state machine, persistence, retries,
-compensation, cancellation, the REST API). Not yet built: the Python SDK
-and the dashboard.
+compensation, cancellation, the REST API) and the Python SDK (client,
+workflow definitions, worker runtime). Not yet built: the dashboard.
