@@ -1,0 +1,31 @@
+# Go
+/engine/bin/
+/engine/flowforged
+*.exe
+*.test
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# Runtime data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/data/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
