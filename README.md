@@ -19,6 +19,18 @@ It's split across three languages, each doing the part it's suited for:
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit
 together.
 
+## Quickstart with Docker
+
+```
+docker compose up --build
+```
+
+Starts the engine on `:8080` and the dashboard on `:5173`, with the
+engine's SQLite file in a named volume so it survives `docker compose
+down` (use `-v` to also drop the volume). This is the fastest way to see
+the dashboard against a real engine; everything below covers running each
+piece directly instead.
+
 ## Running the engine
 
 ```

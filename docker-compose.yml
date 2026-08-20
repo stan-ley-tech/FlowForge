@@ -1,0 +1,22 @@
+services:
+  engine:
+    build: ./engine
+    ports:
+      - "8080:8080"
+    volumes:
+      - flowforge-data:/data
+    environment:
+      FLOWFORGE_DB_PATH: /data/flowforge.db
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_FLOWFORGE_API_URL: http://localhost:8080
+    ports:
+      - "5173:80"
+    depends_on:
+      - engine
+
+volumes:
+  flowforge-data:
