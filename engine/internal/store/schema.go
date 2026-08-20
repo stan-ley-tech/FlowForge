@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS steps (
 	step_index          INTEGER NOT NULL,
 	is_compensation     INTEGER NOT NULL DEFAULT 0,
 	compensation_of     TEXT NOT NULL DEFAULT '',
+	delay_seconds       INTEGER NOT NULL DEFAULT 0,
 	status              TEXT NOT NULL,
 	attempt             INTEGER NOT NULL DEFAULT 0,
 	max_attempts        INTEGER NOT NULL,

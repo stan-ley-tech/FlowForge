@@ -103,6 +103,7 @@ type Step struct {
 	StepIndex         int
 	IsCompensation    bool
 	CompensationOf    string
+	DelaySeconds      int
 	Status            StepStatus
 	Attempt           int
 	MaxAttempts       int

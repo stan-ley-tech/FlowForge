@@ -229,12 +229,12 @@ func (q *Queries) ListQueuedRuns(ctx context.Context, workflowName string, limit
 func (q *Queries) InsertStep(ctx context.Context, s model.Step) error {
 	_, err := q.db.ExecContext(ctx, `
 		INSERT INTO steps (
-			id, run_id, name, step_index, is_compensation, compensation_of, status, attempt,
+			id, run_id, name, step_index, is_compensation, compensation_of, delay_seconds, status, attempt,
 			max_attempts, backoff_base_ms, backoff_multiplier, backoff_max_ms, jitter_fraction,
 			timeout_seconds, scheduled_at, lease_token, lease_owner, lease_expires_at, started_at,
 			result, error, idempotency_key, created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		s.ID, s.RunID, s.Name, s.StepIndex, boolToInt(s.IsCompensation), s.CompensationOf, string(s.Status), s.Attempt,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.RunID, s.Name, s.StepIndex, boolToInt(s.IsCompensation), s.CompensationOf, s.DelaySeconds, string(s.Status), s.Attempt,
 		s.MaxAttempts, s.BackoffBaseMs, s.BackoffMultiplier, s.BackoffMaxMs, s.JitterFraction,
 		s.TimeoutSeconds, fmtTime(s.ScheduledAt), s.LeaseToken, s.LeaseOwner, fmtNullTime(s.LeaseExpiresAt), fmtNullTime(s.StartedAt),
 		string(s.Result), s.Error, s.IdempotencyKey, fmtTime(s.CreatedAt), fmtTime(s.UpdatedAt))
@@ -255,7 +255,7 @@ func scanStepRow(scan func(dest ...any) error) (model.Step, error) {
 	var leaseExpiresAt, startedAt sql.NullString
 	var result string
 	err := scan(
-		&s.ID, &s.RunID, &s.Name, &s.StepIndex, &isComp, &s.CompensationOf, &status, &s.Attempt,
+		&s.ID, &s.RunID, &s.Name, &s.StepIndex, &isComp, &s.CompensationOf, &s.DelaySeconds, &status, &s.Attempt,
 		&s.MaxAttempts, &s.BackoffBaseMs, &s.BackoffMultiplier, &s.BackoffMaxMs, &s.JitterFraction,
 		&s.TimeoutSeconds, &scheduledAt, &s.LeaseToken, &s.LeaseOwner, &leaseExpiresAt, &startedAt,
 		&result, &s.Error, &s.IdempotencyKey, &createdAt, &updatedAt,
@@ -274,7 +274,7 @@ func scanStepRow(scan func(dest ...any) error) (model.Step, error) {
 	return s, nil
 }
 
-const stepColumns = `id, run_id, name, step_index, is_compensation, compensation_of, status, attempt,
+const stepColumns = `id, run_id, name, step_index, is_compensation, compensation_of, delay_seconds, status, attempt,
 	max_attempts, backoff_base_ms, backoff_multiplier, backoff_max_ms, jitter_fraction,
 	timeout_seconds, scheduled_at, lease_token, lease_owner, lease_expires_at, started_at,
 	result, error, idempotency_key, created_at, updated_at`
@@ -327,24 +327,26 @@ func (q *Queries) UpdateStep(ctx context.Context, s model.Step) error {
 }
 
 // ClaimReadyStep atomically picks the single oldest-scheduled READY step
-// whose scheduled_at has passed, leases it to workerID, and returns it.
-// The UPDATE...RETURNING form makes selection and claim one statement, so
-// two workers polling at the same time can never be handed the same step.
-func (q *Queries) ClaimReadyStep(ctx context.Context, workerID string, leaseDuration time.Duration, now time.Time) (*model.Step, error) {
+// belonging to workflowName whose scheduled_at has passed, leases it to
+// workerID, and returns it. The UPDATE...RETURNING form makes selection
+// and claim one statement, so two workers polling at the same time can
+// never be handed the same step.
+func (q *Queries) ClaimReadyStep(ctx context.Context, workflowName, workerID string, leaseDuration time.Duration, now time.Time) (*model.Step, error) {
 	leaseExpires := now.Add(leaseDuration)
 	row := q.db.QueryRowContext(ctx, `
 		UPDATE steps SET
 			status = ?, attempt = attempt + 1, lease_token = lower(hex(randomblob(16))),
 			lease_owner = ?, lease_expires_at = ?, started_at = ?, updated_at = ?
 		WHERE id = (
-			SELECT id FROM steps
-			WHERE status = ? AND scheduled_at <= ?
-			ORDER BY scheduled_at ASC
+			SELECT s.id FROM steps s
+			JOIN runs r ON r.id = s.run_id
+			WHERE s.status = ? AND s.scheduled_at <= ? AND r.workflow_name = ?
+			ORDER BY s.scheduled_at ASC
 			LIMIT 1
 		)
 		RETURNING `+stepColumns,
 		string(model.StepLeased), workerID, fmtTime(leaseExpires), fmtTime(now), fmtTime(now),
-		string(model.StepReady), fmtTime(now))
+		string(model.StepReady), fmtTime(now), workflowName)
 
 	s, err := scanStepRow(row.Scan)
 	if err == sql.ErrNoRows {
@@ -361,6 +363,27 @@ func (q *Queries) ClaimReadyStep(ctx context.Context, workerID string, leaseDura
 func (q *Queries) FindExpiredLeaseSteps(ctx context.Context, now time.Time) ([]model.Step, error) {
 	rows, err := q.db.QueryContext(ctx, `SELECT `+stepColumns+` FROM steps WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
 		string(model.StepLeased), fmtTime(now))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.Step
+	for rows.Next() {
+		s, err := scanStepRow(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// FindLeasedSteps returns every step currently held by a worker,
+// regardless of when its lease expires - used to check business-logic
+// timeouts, which are independent of lease expiry.
+func (q *Queries) FindLeasedSteps(ctx context.Context) ([]model.Step, error) {
+	rows, err := q.db.QueryContext(ctx, `SELECT `+stepColumns+` FROM steps WHERE status = ?`, string(model.StepLeased))
 	if err != nil {
 		return nil, err
 	}
